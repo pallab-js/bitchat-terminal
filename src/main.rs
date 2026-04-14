@@ -33,7 +33,6 @@ use bloomfilter::Bloom;
 use rand::Rng;
 use sha2::{Sha256, Digest};
 use serde::{Serialize, Deserialize};
-use serde_json;
 
 // Debug levels
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,7 +76,7 @@ mod persistence;
 use compression::decompress;
 use fragmentation::{Fragment, FragmentType};
 use encryption::EncryptionService;
-use terminal_ux::{ChatContext, ChatMode, format_message_display, print_help};
+use terminal_ux::{ChatContext, ChatMode, format_message_display, print_help, MessageDisplayConfig};
 use persistence::{AppState, load_state, save_state, encrypt_password, decrypt_password};
 
 // --- Constants ---
@@ -333,7 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let manager = Manager::new().await?;
     let adapters = manager.adapters().await?;
-    let adapter = match adapters.into_iter().nth(0) {
+    let adapter = match adapters.into_iter().next() {
         Some(adapter) => adapter,
         None => {
             println!("\n\x1b[91m❌ No Bluetooth adapter found\x1b[0m");
@@ -403,7 +402,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate peer ID like Swift does (4 random bytes as hex)
     let mut peer_id_bytes = [0u8; 4];
     rand::thread_rng().fill(&mut peer_id_bytes);
-    let my_peer_id = hex::encode(&peer_id_bytes);
+    let my_peer_id = hex::encode(peer_id_bytes);
     debug_full_println!("[DEBUG] My peer ID: {}", my_peer_id);
     
     // Load persisted state early to get saved nickname
@@ -514,8 +513,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 
                 // Handle /name command
-                if line.starts_with("/name ") {
-                    let new_name = line[6..].trim();
+                if let Some(stripped) = line.strip_prefix("/name ") {
+                    let new_name = stripped.trim();
                     if new_name.is_empty() {
                         println!("\x1b[93m⚠ Usage: /name <new_nickname>\x1b[0m");
                         println!("\x1b[90mExample: /name Alice\x1b[0m");
@@ -635,7 +634,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Verify password against stored key commitment (iOS compatibility)
                                 if let Some(expected_commitment) = channel_key_commitments.get(&channel_name) {
                                     let test_commitment = {
-                                        let hash = sha2::Sha256::digest(&key);
+                                        let hash = sha2::Sha256::digest(key);
                                         hex::encode(hash)
                                     };
                                     
@@ -688,7 +687,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // This matches iOS behavior
                                 if let Some(owner) = channel_creators.get(&channel_name) {
                                     let key_commitment = {
-                                        let hash = sha2::Sha256::digest(&key);
+                                        let hash = sha2::Sha256::digest(key);
                                         hex::encode(hash)
                                     };
                                     debug_println!("[CHANNEL] Sending join announce for password channel {}", channel_name);
@@ -725,7 +724,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // This matches iOS behavior
                                 if let Some(owner) = channel_creators.get(&channel_name) {
                                     let key_commitment = {
-                                        let hash = sha2::Sha256::digest(&key);
+                                        let hash = sha2::Sha256::digest(key);
                                         hex::encode(hash)
                                     };
                                     debug_println!("[CHANNEL] Sending join announce for password channel {}", channel_name);
@@ -993,17 +992,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if parts.len() == 2 {
                         // Block a specific peer
                         let target_name = parts[1];
-                        let nickname = if target_name.starts_with("@") {
-                            &target_name[1..]
-                        } else {
-                            target_name
-                        };
+                        let nickname = target_name.strip_prefix('@').unwrap_or(target_name);
                         
                         // Find peer ID for nickname
                         let peer_id = {
                             let peers_guard = peers.lock().unwrap();
                             peers_guard.iter()
-                                .find(|(_, peer)| peer.nickname.as_deref() == Some(nickname))
+                                .find(|(_, peer)| peer.nickname.as_deref() == Some(&nickname))
                                 .map(|(id, _)| id.clone())
                         };
                         
@@ -1056,11 +1051,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     
                     let target_name = parts[1];
-                    let nickname = if target_name.starts_with("@") {
-                        &target_name[1..]
-                    } else {
-                        target_name
-                    };
+                    let nickname = target_name.strip_prefix('@').unwrap_or(target_name);
                     
                     // Find peer ID for nickname
                     let peer_id = {
@@ -1303,17 +1294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Calculate key commitment (SHA256 of key)
                                     use sha2::Digest;
                                     let mut hasher = Sha256::new();
-                                    hasher.update(&new_key);
+                                    hasher.update(new_key);
                                     let commitment = hasher.finalize();
-                                    let commitment_hex = hex::encode(&commitment);
+                                    let commitment_hex = hex::encode(commitment);
                                     
                                     // Send notification with old key if exists
                                     if let Some(old_key) = old_key {
                                         let notify_msg = "🔐 Password changed by channel owner. Please update your password.";
-                                        let encrypted_notify = match encryption_service.encrypt_with_key(notify_msg.as_bytes(), &old_key) {
-                                            Ok(enc) => enc,
-                                            Err(_) => Vec::new(),
-                                        };
+                                        let encrypted_notify = encryption_service.encrypt_with_key(notify_msg.as_bytes(), &old_key).unwrap_or_default();
                                         
                                         if !encrypted_notify.is_empty() {
                                             let (notify_payload, _) = create_encrypted_channel_message_payload(
@@ -1408,10 +1396,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Calculate key commitment
                                 use sha2::Digest;
                                 let mut hasher = Sha256::new();
-                                hasher.update(&new_key);
+                                hasher.update(new_key);
                                 let commitment = hasher.finalize();
-                                let commitment_hex = hex::encode(&commitment);
-                                
+                                let commitment_hex = hex::encode(commitment);                                
                                 // Send channel announce to claim ownership and announce password
                                 debug_println!("[CHANNEL] Claiming ownership of {} and setting password", channel);
                                 if let Err(e) = send_channel_announce(
@@ -1465,18 +1452,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let target_name = parts[1];
                                     
                                     // Remove @ prefix if present
-                                    let target_name = if target_name.starts_with('@') {
-                                        &target_name[1..]
-                                    } else {
-                                        target_name
-                                    };
+                                    let target_name = target_name.strip_prefix('@').unwrap_or(target_name);
                                     
                                     // Find the peer ID for the target nickname
-                                    let peers_lock = peers.lock().unwrap();
-                                    let target_peer_id = peers_lock.iter()
-                                        .find(|(_, peer)| peer.nickname.as_ref().map(|n| n == target_name).unwrap_or(false))
-                                        .map(|(id, _)| id.clone());
-                                    drop(peers_lock);
+                                    let target_peer_id = {
+                                        let peers_lock = peers.lock().unwrap();
+                                        peers_lock.iter()
+                                            .find(|(_, peer)| peer.nickname.as_ref().map(|n| n == target_name).unwrap_or(false))
+                                            .map(|(id, _)| id.clone())
+                                    };
                                     
                                     if let Some(new_owner_id) = target_peer_id {
                                         // Update the channel owner
@@ -1512,7 +1496,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         };
                                         
                                         // Send announce packet with new owner
-                                        match send_channel_announce(&peripheral, &cmd_char, &new_owner_id, channel, is_protected, key_commitment.as_deref()).await {
+                                        match send_channel_announce(&peripheral, cmd_char, &new_owner_id, channel, is_protected, key_commitment.as_deref()).await {
                                             Ok(_) => {
                                                 println!("» Transferred ownership of {} to {}", channel, target_name);
                                             }
@@ -1605,16 +1589,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 // Show the message was sent in a cleaner format
                                 let timestamp = chrono::Local::now();
-                                let display = format_message_display(
+                                let display = format_message_display(MessageDisplayConfig {
                                     timestamp,
-                                    &nickname,  // sender
-                                    &line,
-                                    true, // is_private
-                                    false, // is_channel
-                                    None, // channel_name
-                                    Some(target_nickname), // recipient
-                                    &nickname, // my_nickname
-                                );
+                                    sender: &nickname,
+                                    content: &line,
+                                    is_private: true,
+                                    is_channel: false,
+                                    channel_name: None,
+                                    recipient: Some(target_nickname),
+                                    my_nickname: &nickname,
+                                });
                                 // Move cursor up to overwrite the input line, clear it, print message
                                 print!("\x1b[1A\r\x1b[K{}\n", display);
                                 std::io::stdout().flush().unwrap();
@@ -1702,16 +1686,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // Display the sent message in a clean format
                 let timestamp = chrono::Local::now();
-                let display = format_message_display(
+                let display = format_message_display(MessageDisplayConfig {
                     timestamp,
-                    &nickname,
-                    &line,
-                    false, // is_private
-                    current_channel.is_some(), // is_channel
-                    current_channel.as_deref(), // channel_name
-                    None, // recipient
-                    &nickname // my_nickname
-                );
+                    sender: &nickname,
+                    content: &line,
+                    is_private: false,
+                    is_channel: current_channel.is_some(),
+                    channel_name: current_channel.as_deref(),
+                    recipient: None,
+                    my_nickname: &nickname,
+                });
                 // Move cursor up to overwrite the input line, clear it, print message
                 print!("\x1b[1A\r\x1b[K{}\n", display);
                 std::io::stdout().flush().unwrap();
@@ -1732,17 +1716,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
 
-                        let mut peers_lock = peers.lock().unwrap();
-
                      match packet.msg_type {
 
                          MessageType::Announce => {
                              let peer_nickname = String::from_utf8_lossy(&packet.payload).trim().to_string();
 
+                             let mut peers_lock = peers.lock().unwrap();
                              let is_new_peer = !peers_lock.contains_key(&packet.sender_id_str);
                              let peer_entry = peers_lock.entry(packet.sender_id_str.clone()).or_default();
 
                              peer_entry.nickname = Some(peer_nickname.clone());
+                             drop(peers_lock);
 
                              // Show connection notification in clean mode only for new peers
                              if is_new_peer {
@@ -1868,9 +1852,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                      // Add to bloom filter immediately to prevent duplicate processing
                                      bloom.set(&message.id);
 
-                                     let sender_nick = peers_lock.get(&packet.sender_id_str)
-                                         .and_then(|p| p.nickname.as_ref())
-                                         .map_or(&packet.sender_id_str, |n| n);
+                                     let sender_nick = {
+                                         let peers_lock = peers.lock().unwrap();
+                                         peers_lock.get(&packet.sender_id_str)
+                                             .and_then(|p| p.nickname.as_ref())
+                                             .cloned()
+                                             .unwrap_or_else(|| packet.sender_id_str.clone())
+                                     };
 
                                         // Track discovered channels
                                         if let Some(channel) = &message.channel {
@@ -1922,22 +1910,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 chat_context.last_private_sender = Some((packet.sender_id_str.clone(), sender_nick.to_string()));
                                                 chat_context.add_dm(&sender_nick, &packet.sender_id_str);
                                                 
-                                                let display = format_message_display(
-                                                    timestamp,
-                                                    &sender_nick,
-                                                    &display_content,
-                                                    true, // is_private
-                                                    false, // is_channel
-                                                    None, // channel_name
-                                                    Some(&nickname), // recipient (me)
-                                                    &nickname // my_nickname
-                                                );
+                                use terminal_ux::MessageDisplayConfig;
+                                let display = format_message_display(MessageDisplayConfig {
+                                    timestamp,
+                                    sender: &sender_nick,
+                                    content: &display_content,
+                                    is_private: true,
+                                    is_channel: false,
+                                    channel_name: None,
+                                    recipient: Some(&nickname),
+                                    my_nickname: &nickname,
+                                });
                                                 // Clear any existing prompt and print the message
                                                 print!("\r\x1b[K{}\n", display);
                                                 
                                                 // Show minimal reply hint
                                                 if !matches!(&chat_context.current_mode, ChatMode::PrivateDM { .. }) {
-                                                    print!("\x1b[90m» /reply to respond\x1b[0m\n");
+                                                    println!("\x1b[90m» /reply to respond\x1b[0m");
                                                 }
                                                 print!("> ");
                                                 std::io::stdout().flush().unwrap();
@@ -1947,31 +1936,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 // Track this channel
                                                 chat_context.add_channel(channel_name);
                                                 
-                                                let display = format_message_display(
+                                                let display = format_message_display(MessageDisplayConfig {
                                                     timestamp,
-                                                    &sender_nick,
-                                                    &display_content,
-                                                    false, // is_private
-                                                    true, // is_channel
-                                                    Some(channel_name), // channel_name
-                                                    None, // recipient
-                                                    &nickname // my_nickname
-                                                );
+                                                    sender: &sender_nick,
+                                                    content: &display_content,
+                                                    is_private: false,
+                                                    is_channel: true,
+                                                    channel_name: Some(channel_name),
+                                                    recipient: None,
+                                                    my_nickname: &nickname,
+                                                });
                                                 // Clear any existing prompt and print the message
                                                 print!("\r\x1b[K{}\n", display);
                                                 std::io::stdout().flush().unwrap();
                                             } else {
                                                 // Public message
-                                                let display = format_message_display(
+                                                let display = format_message_display(MessageDisplayConfig {
                                                     timestamp,
-                                                    &sender_nick,
-                                                    &display_content,
-                                                    false, // is_private
-                                                    false, // is_channel
-                                                    None, // channel_name
-                                                    None, // recipient
-                                                    &nickname // my_nickname
-                                                );
+                                                    sender: &sender_nick,
+                                                    content: &display_content,
+                                                    is_private: false,
+                                                    is_channel: false,
+                                                    channel_name: None,
+                                                    recipient: None,
+                                                    my_nickname: &nickname,
+                                                });
                                                 // Clear any existing prompt and print the message
                                                 print!("\r\x1b[K{}\n> ", display);
                                                 std::io::stdout().flush().unwrap();
@@ -1979,7 +1968,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                      
                                      // Send delivery ACK if needed (matching iOS behavior)
-                                     let active_peer_count = peers_lock.len();
+                                     let active_peer_count = {
+                                         let peers_lock = peers.lock().unwrap();
+                                         peers_lock.len()
+                                     };
                                      if should_send_ack(is_private_message, message.channel.as_deref(), None, &nickname, active_peer_count) {
                                          // Check if we've already sent an ACK for this message
                                          let ack_id = format!("{}-{}", message.id, my_peer_id);
@@ -2117,9 +2109,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                              
                                              if let Ok(message) = message_result {
                                                  if !bloom.check(&message.id) {
-                                                     let sender_nick = peers_lock.get(&reassembled_packet.sender_id_str)
-                                                         .and_then(|p| p.nickname.as_ref())
-                                                         .map_or(&reassembled_packet.sender_id_str, |n| n);
+                                                     let sender_nick = {
+                                                         let peers_lock = peers.lock().unwrap();
+                                                         peers_lock.get(&reassembled_packet.sender_id_str)
+                                                             .and_then(|p| p.nickname.as_ref())
+                                                             .cloned()
+                                                             .unwrap_or_else(|| reassembled_packet.sender_id_str.clone())
+                                                     };
                                                      
                                                      {
                                                          // Track discovered channels from fragmented messages
@@ -2139,16 +2135,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                          
                                                          // Regular message - display it
                                                          let timestamp = chrono::Local::now();
-                                                         let display = format_message_display(
+                                                         let display = format_message_display(MessageDisplayConfig {
                                                              timestamp,
-                                                             sender_nick,
-                                                             &message.content,
-                                                             is_private_message, // Use the actual private message flag
-                                                             message.channel.is_some(), // is_channel
-                                                             message.channel.as_deref(),
-                                                             if is_private_message { Some(&nickname) } else { None }, // recipient for private messages
-                                                             &nickname // my_nickname
-                                                         );
+                                                             sender: &sender_nick,
+                                                             content: &message.content,
+                                                             is_private: is_private_message,
+                                                             is_channel: message.channel.is_some(),
+                                                             channel_name: message.channel.as_deref(),
+                                                             recipient: if is_private_message { Some(&nickname) } else { None },
+                                                             my_nickname: &nickname,
+                                                         });
                                                          // Clear any existing prompt and print the message
                                                 print!("\r\x1b[K{}\n> ", display);
                                                 std::io::stdout().flush().unwrap();
@@ -2191,7 +2187,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  debug_println!("[+] Successfully added encryption keys for peer {}", packet.sender_id_str);
                                  
                                  // Send our key exchange back if we haven't already
-                                 if !peers_lock.contains_key(&packet.sender_id_str) {
+                                 let should_send_response = {
+                                     let peers_lock = peers.lock().unwrap();
+                                     !peers_lock.contains_key(&packet.sender_id_str)
+                                 };
+
+                                 if should_send_response {
                                      debug_full_println!("[CRYPTO] Sending key exchange response to {}", packet.sender_id_str);
                                      let (key_exchange_payload, _) = generate_keys_and_payload(&encryption_service);
                                      let key_exchange_packet = create_bitchat_packet(&my_peer_id, MessageType::KeyExchange, key_exchange_payload);
@@ -2208,9 +2209,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                              if payload_str.starts_with('#') {
                                  // Channel leave notification
                                  let channel = payload_str;
-                                 let sender_nick = peers_lock.get(&packet.sender_id_str)
-                                     .and_then(|p| p.nickname.as_ref())
-                                     .map_or(&packet.sender_id_str, |n| n);
+                                 let sender_nick = {
+                                     let peers_lock = peers.lock().unwrap();
+                                     peers_lock.get(&packet.sender_id_str)
+                                         .and_then(|p| p.nickname.as_ref())
+                                         .cloned()
+                                         .unwrap_or_else(|| packet.sender_id_str.clone())
+                                 };
                                  
                                  // Show leave message only if we're in that channel
                                  if let ChatMode::Channel(current_channel) = &chat_context.current_mode {
@@ -2223,7 +2228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  debug_println!("[<-- RECV] {} left channel {}", sender_nick, channel);
                              } else {
                                  // Legacy peer disconnect
-                                 peers_lock.remove(&packet.sender_id_str);
+                                 {
+                                     let mut peers_lock = peers.lock().unwrap();
+                                     peers_lock.remove(&packet.sender_id_str);
+                                 }
                                  debug_println!("[<-- RECV] Peer {} ({}) has left", packet.sender_id_str, payload_str);
                              }
                          },
@@ -2403,7 +2411,7 @@ fn parse_bitchat_message_payload(data: &[u8]) -> Result<BitchatMessage, &'static
 
     let mut offset = 0;
 
-    if data.len() < 1 { return Err("Payload too short for flags"); }
+    if data.is_empty() { return Err("Payload too short for flags"); }
 
     let flags = data[offset];
     debug_full_println!("[PARSE] Flags: 0x{:02X} (has_channel={}, is_private={}, is_encrypted={}, has_recipient_nickname={}, has_sender_peer_id={})", 
@@ -2830,10 +2838,7 @@ fn create_bitchat_packet_with_recipient(sender_id_str: &str, recipient_id_str: O
     
     // 5. Flags (1 byte)
     let mut flags: u8 = 0;
-    let has_recipient = match msg_type {
-        MessageType::FragmentStart | MessageType::FragmentContinue | MessageType::FragmentEnd => false,
-        _ => true
-    };
+    let has_recipient = !matches!(msg_type, MessageType::FragmentStart | MessageType::FragmentContinue | MessageType::FragmentEnd);
     if has_recipient {
         flags |= FLAG_HAS_RECIPIENT;
     }
@@ -2875,7 +2880,7 @@ fn create_bitchat_packet_with_recipient(sender_id_str: &str, recipient_id_str: O
         } else {
             // Broadcast message
             data.extend_from_slice(&BROADCAST_RECIPIENT);
-            debug_full_println!("[PACKET] Recipient ID (broadcast): {} bytes: {}", BROADCAST_RECIPIENT.len(), hex::encode(&BROADCAST_RECIPIENT));
+            debug_full_println!("[PACKET] Recipient ID (broadcast): {} bytes: {}", BROADCAST_RECIPIENT.len(), hex::encode(BROADCAST_RECIPIENT));
         }
     } else {
         debug_full_println!("[PACKET] No recipient ID (fragment packet)");
@@ -2949,7 +2954,7 @@ fn should_send_ack(is_private: bool, channel: Option<&str>, mentions: Option<&Ve
     if is_private {
         // Always ACK private messages
         true
-    } else if let Some(_) = channel {
+    } else if channel.is_some() {
         // For room messages, ACK if:
         // 1. Less than 10 active peers, OR
         // 2. We're mentioned

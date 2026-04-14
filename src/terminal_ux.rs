@@ -162,7 +162,7 @@ impl ChatContext {
         }
         
         // DMs
-        for (nick, _) in &self.active_dms {
+        for nick in self.active_dms.keys() {
             let is_current = matches!(&self.current_mode, ChatMode::PrivateDM { nickname, .. } if nickname == nick);
             let dm_text = format!("DM: {}", nick);
             println!("│ {} [{}] {}{}│", 
@@ -196,7 +196,7 @@ impl ChatContext {
         }
         
         // DMs
-        for (nick, _) in &self.active_dms {
+        for nick in self.active_dms.keys() {
             let dm_text = format!("DM: {}", nick);
             output.push_str(&format!("│  {}. {}{}│\n", 
                 num,
@@ -211,56 +211,58 @@ impl ChatContext {
     }
 }
 
-pub fn format_message_display(
-    timestamp: DateTime<Local>,
-    sender: &str,
-    content: &str,
-    is_private: bool,
-    is_channel: bool,
-    channel_name: Option<&str>,
-    recipient: Option<&str>,
-    my_nickname: &str,
-) -> String {
-    let time_str = timestamp.format("%H:%M").to_string();
+pub struct MessageDisplayConfig<'a> {
+    pub timestamp: DateTime<Local>,
+    pub sender: &'a str,
+    pub content: &'a str,
+    pub is_private: bool,
+    pub is_channel: bool,
+    pub channel_name: Option<&'a str>,
+    pub recipient: Option<&'a str>,
+    pub my_nickname: &'a str,
+}
+
+pub fn format_message_display(config: MessageDisplayConfig) -> String {
+    let time_str = config.timestamp.format("%H:%M").to_string();
     
-    if is_private {
+    if config.is_private {
         // Use orange for private messages (matching iOS)
-        if sender == my_nickname {
+        if config.sender == config.my_nickname {
             // Message I sent - use brighter orange
-            if let Some(recipient) = recipient {
-                format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;214m<you → {}>\x1b[0m {}", time_str, recipient, content)
+            if let Some(recipient) = config.recipient {
+                format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;214m<you → {}>\x1b[0m {}", time_str, recipient, config.content)
             } else {
-                format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;214m<you → ???>\x1b[0m {}", time_str, content)
+                format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;214m<you → ???>\x1b[0m {}", time_str, config.content)
             }
         } else {
             // Message I received - use normal orange
-            format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;208m<{} → you>\x1b[0m {}", time_str, sender, content)
+            format!("\x1b[2;38;5;208m[{}|DM]\x1b[0m \x1b[38;5;208m<{} → you>\x1b[0m {}", time_str, config.sender, config.content)
         }
-    } else if is_channel {
+    } else if config.is_channel {
         // Use blue for channel messages (matching iOS)
-        if sender == my_nickname {
+        if config.sender == config.my_nickname {
             // My messages - use light blue (256-color)
-            if let Some(channel) = channel_name {
-                format!("\x1b[2;34m[{}|{}]\x1b[0m \x1b[38;5;117m<{} @ {}>\x1b[0m {}", time_str, channel, sender, channel, content)
+            if let Some(channel) = config.channel_name {
+                format!("\x1b[2;34m[{}|{}]\x1b[0m \x1b[38;5;117m<{} @ {}>\x1b[0m {}", time_str, channel, config.sender, channel, config.content)
             } else {
-                format!("\x1b[2;34m[{}|Ch]\x1b[0m \x1b[38;5;117m<{} @ ???>\x1b[0m {}", time_str, sender, content)
+                format!("\x1b[2;34m[{}|Ch]\x1b[0m \x1b[38;5;117m<{} @ ???>\x1b[0m {}", time_str, config.sender, config.content)
             }
         } else {
             // Other users - use normal blue
-            if let Some(channel) = channel_name {
-                format!("\x1b[2;34m[{}|{}]\x1b[0m \x1b[34m<{} @ {}>\x1b[0m {}", time_str, channel, sender, channel, content)
+            if let Some(channel) = config.channel_name {
+                format!("\x1b[2;34m[{}|{}]\x1b[0m \x1b[34m<{} @ {}>\x1b[0m {}", time_str, channel, config.sender, channel, config.content)
             } else {
-                format!("\x1b[2;34m[{}|Ch]\x1b[0m \x1b[34m<{} @ ???>\x1b[0m {}", time_str, sender, content)
+                format!("\x1b[2;34m[{}|Ch]\x1b[0m \x1b[34m<{} @ ???>\x1b[0m {}", time_str, config.sender, config.content)
             }
         }
     } else {
         // Public message - use green for metadata
-        if sender == my_nickname {
+        if config.sender == config.my_nickname {
             // My messages - use light green (256-color)
-            format!("\x1b[2;32m[{}]\x1b[0m \x1b[38;5;120m<{}>\x1b[0m {}", time_str, sender, content)
+            format!("\x1b[2;32m[{}]\x1b[0m \x1b[38;5;120m<{}>\x1b[0m {}", time_str, config.sender, config.content)
         } else {
             // Other users - use normal green
-            format!("\x1b[2;32m[{}]\x1b[0m \x1b[32m<{}>\x1b[0m {}", time_str, sender, content)
+            format!("\x1b[2;32m[{}]\x1b[0m \x1b[32m<{}>\x1b[0m {}", time_str, config.sender, config.content)
         }
     }
 }

@@ -107,7 +107,7 @@ impl EncryptionService {
                 // This is likely Android with the identity key bug
                 // For now, just use the signing key as identity key to maintain compatibility
                 eprintln!("[CRYPTO] Note: Peer {} appears to be Android (invalid identity key format)", peer_id);
-                signing_key.clone()
+                signing_key
             }
         };
         
