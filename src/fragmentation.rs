@@ -26,6 +26,25 @@ pub struct Fragment {
     pub data: Vec<u8>,
 }
 
+impl Fragment {
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut fragment_payload = Vec::new();
+        fragment_payload.extend_from_slice(&self.fragment_id);
+        
+        let index_bytes = self.index.to_be_bytes();
+        let total_bytes = self.total.to_be_bytes();
+        
+        fragment_payload.push(index_bytes[0]);
+        fragment_payload.push(index_bytes[1]);
+        fragment_payload.push(total_bytes[0]);
+        fragment_payload.push(total_bytes[1]);
+        fragment_payload.push(self.original_type);
+        fragment_payload.extend_from_slice(&self.data);
+        
+        fragment_payload
+    }
+}
+
 // Helper function to convert fragment ID to hex string (matching Swift's hexEncodedString)
 #[allow(dead_code)]
 fn fragment_id_to_hex(fragment_id: &[u8; 8]) -> String {

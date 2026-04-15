@@ -149,3 +149,26 @@ pub fn decrypt_password(encrypted: &EncryptedPassword, identity_key: &[u8]) -> R
     String::from_utf8(plaintext)
         .map_err(|e| format!("Invalid UTF-8: {}", e).into())
 }
+pub fn create_app_state(
+    blocked: &HashSet<String>, 
+    creators: &HashMap<String, String>,
+    channels: &Vec<String>,
+    protected: &HashSet<String>,
+    commitments: &HashMap<String, String>,
+    encrypted_passwords: &HashMap<String, EncryptedPassword>,
+    current_nickname: &str,
+    identity_key: Option<Vec<u8>>,
+    favorites: &HashSet<String>
+) -> AppState {
+    AppState {
+        nickname: Some(current_nickname.to_string()),
+        identity_key,
+        blocked_peers: blocked.clone(),
+        channel_creators: creators.clone(),
+        joined_channels: channels.clone(),
+        password_protected_channels: protected.clone(),
+        channel_key_commitments: commitments.clone(),
+        encrypted_channel_passwords: encrypted_passwords.clone(),
+        favorites: favorites.clone(),
+    }
+}

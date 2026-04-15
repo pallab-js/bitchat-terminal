@@ -286,6 +286,19 @@ impl EncryptionService {
         // This is the same as encrypt() but makes the intent clearer
         self.encrypt(data, peer_id)
     }
+
+    pub fn get_public_key(&self) -> Vec<u8> {
+        self.public_key.as_bytes().to_vec()
+    }
+
+    pub fn get_my_fingerprint(&self) -> String {
+        use sha2::Digest;
+        let hash = Sha256::digest(self.identity_public.as_bytes());
+        hash.iter()
+            .take(16)
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>()
+    }
 }
 
 #[cfg(test)]
